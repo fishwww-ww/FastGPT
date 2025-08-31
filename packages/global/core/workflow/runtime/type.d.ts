@@ -78,6 +78,17 @@ export type ChatDispatchProps = {
 
   responseAllData?: boolean;
   responseDetail?: boolean;
+
+  // 企业微信加密配置
+  wecomCrypto?: {
+    token: string;
+    aesKey: string;
+    nonce: string;
+    streamId: string;
+  };
+
+  // 企业微信流式响应完成标志
+  isFinished?: boolean;
 };
 
 export type ModuleDispatchProps<T> = ChatDispatchProps & {
