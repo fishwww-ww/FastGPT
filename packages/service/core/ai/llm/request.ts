@@ -25,6 +25,8 @@ import type { LLMModelItemType } from '@fastgpt/global/core/ai/model.d';
 import { i18nT } from '../../../../web/i18n/utils';
 import { getErrText } from '@fastgpt/global/common/error/utils';
 import json5 from 'json5';
+import type { NextApiResponse } from 'next';
+import { getMsgSinJsonStr } from '../../../common/secret/wecom';
 
 type ResponseEvents = {
   onStreaming?: ({ text }: { text: string }) => void;
@@ -33,11 +35,21 @@ type ResponseEvents = {
   onToolParam?: ({ tool, params }: { tool: ChatCompletionMessageToolCall; params: string }) => void;
 };
 
+type WecomCrypto = {
+  token: string;
+  aesKey: string;
+  nonce: string;
+  streamId: string;
+};
+
 type CreateLLMResponseProps<T extends CompletionsBodyType> = {
   userKey?: OpenaiAccountType;
   body: LLMRequestBodyType<T>;
   isAborted?: () => boolean | undefined;
   custonHeaders?: Record<string, string>;
+  res?: NextApiResponse;
+  wecomCrypto?: WecomCrypto;
+  isFinished?: boolean;
 } & ResponseEvents;
 
 type LLMResponse = {
@@ -64,7 +76,7 @@ type LLMResponse = {
 export const createLLMResponse = async <T extends CompletionsBodyType>(
   args: CreateLLMResponseProps<T>
 ): Promise<LLMResponse> => {
-  const { body, custonHeaders, userKey } = args;
+  const { body, custonHeaders, userKey, res, wecomCrypto, isFinished } = args;
   const { messages, useVision, requestOrigin, tools, toolCallMode } = body;
 
   // Messages process
@@ -107,7 +119,10 @@ export const createLLMResponse = async <T extends CompletionsBodyType>(
         onStreaming: args.onStreaming,
         onReasoning: args.onReasoning,
         onToolCall: args.onToolCall,
-        onToolParam: args.onToolParam
+        onToolParam: args.onToolParam,
+        res: res!,
+        wecomCrypto,
+        isFinished
       });
     } else {
       return createCompleteResponse({
@@ -173,16 +188,22 @@ type CompleteResponse = Pick<
 };
 
 export const createStreamResponse = async ({
+  res,
   body,
   response,
   isAborted,
   onStreaming,
   onReasoning,
   onToolCall,
-  onToolParam
+  onToolParam,
+  wecomCrypto,
+  isFinished
 }: CompleteParams & {
+  res: NextApiResponse;
   response: StreamChatType;
   isAborted?: () => boolean | undefined;
+  wecomCrypto?: WecomCrypto;
+  isFinished?: boolean;
 }): Promise<CompleteResponse> => {
   const { retainDatasetCite = true, tools, toolCallMode = 'toolChoice', model } = body;
   const modelData = getLLMModel(model);
@@ -262,6 +283,77 @@ export const createStreamResponse = async ({
       }
 
       const { reasoningContent, content, finish_reason, usage } = getResponseData();
+
+      //明文响应
+      const plainAnswer = (finish: boolean, answer: string) => {
+        return {
+          msgtype: 'stream',
+          stream: {
+            id: wecomCrypto!.streamId,
+            finish: finish,
+            content: answer
+          }
+        };
+      };
+
+      // 检查响应是否为空
+      if (!content || content.trim().length === 0) {
+        const defaultAnswer = '抱歉，我暂时无法回答您的问题，请稍后再试。';
+
+        if (isFinished) {
+          const finishRes = plainAnswer(true, defaultAnswer);
+          const finishStamp = Math.floor(Date.now() / 1000).toString();
+          const finishEncrypt = getMsgSinJsonStr(
+            finishRes,
+            finishStamp,
+            wecomCrypto!.nonce,
+            wecomCrypto!.token,
+            wecomCrypto!.aesKey
+          );
+          res.write(finishEncrypt!);
+          res.end();
+        } else {
+          const answerRes = plainAnswer(false, defaultAnswer);
+          const answerStamp = Math.floor(Date.now() / 1000).toString();
+          const streamEncrypt = getMsgSinJsonStr(
+            answerRes,
+            answerStamp,
+            wecomCrypto!.nonce,
+            wecomCrypto!.token,
+            wecomCrypto!.aesKey
+          );
+          res.write(streamEncrypt!);
+          res.end();
+        }
+
+        return { answerText: defaultAnswer, reasoningText: reasoningContent, finish_reason, usage };
+      }
+
+      if (isFinished) {
+        const finishRes = plainAnswer(true, content);
+        const finishStamp = Math.floor(Date.now() / 1000).toString();
+        const finishEncrypt = getMsgSinJsonStr(
+          finishRes,
+          finishStamp,
+          wecomCrypto!.nonce,
+          wecomCrypto!.token,
+          wecomCrypto!.aesKey
+        );
+        res.write(finishEncrypt!);
+        res.end();
+      } else {
+        const answerRes = plainAnswer(false, content);
+        const answerStamp = Math.floor(Date.now() / 1000).toString();
+        const streamEncrypt = getMsgSinJsonStr(
+          answerRes,
+          answerStamp,
+          wecomCrypto!.nonce,
+          wecomCrypto!.token,
+          wecomCrypto!.aesKey
+        );
+        res.write(streamEncrypt!);
+        res.end();
+      }
 
       return {
         answerText: content,
