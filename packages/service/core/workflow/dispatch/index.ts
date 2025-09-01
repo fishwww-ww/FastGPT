@@ -50,13 +50,13 @@ import { callbackMap } from './constants';
 type Props = Omit<ChatDispatchProps, 'workflowDispatchDeep'> & {
   runtimeNodes: RuntimeNodeItemType[];
   runtimeEdges: RuntimeEdgeItemType[];
-  wecomCrypto: {
+  wecomCrypto?: {
     token: string;
     aesKey: string;
     nonce: string;
     streamId: string;
   };
-  isFinished: boolean;
+  isFinished?: boolean;
 };
 type NodeResponseType = DispatchNodeResultType<{
   [key: string]: any;
