@@ -50,7 +50,6 @@ type CreateLLMResponseProps<T extends CompletionsBodyType> = {
   custonHeaders?: Record<string, string>;
   res?: NextApiResponse;
   wecomCrypto?: WecomCrypto;
-  isFinished?: boolean;
 } & ResponseEvents;
 
 type LLMResponse = {
@@ -77,7 +76,7 @@ type LLMResponse = {
 export const createLLMResponse = async <T extends CompletionsBodyType>(
   args: CreateLLMResponseProps<T>
 ): Promise<LLMResponse> => {
-  const { body, custonHeaders, userKey, res, wecomCrypto, isFinished } = args;
+  const { body, custonHeaders, userKey, res, wecomCrypto } = args;
   const { messages, useVision, requestOrigin, tools, toolCallMode } = body;
 
   // Messages process
@@ -122,8 +121,7 @@ export const createLLMResponse = async <T extends CompletionsBodyType>(
         onToolCall: args.onToolCall,
         onToolParam: args.onToolParam,
         res: res!,
-        wecomCrypto,
-        isFinished
+        wecomCrypto
       });
     } else {
       return createCompleteResponse({
@@ -197,14 +195,12 @@ export const createStreamResponse = async ({
   onReasoning,
   onToolCall,
   onToolParam,
-  wecomCrypto,
-  isFinished
+  wecomCrypto
 }: CompleteParams & {
   res: NextApiResponse;
   response: StreamChatType;
   isAborted?: () => boolean | undefined;
   wecomCrypto?: WecomCrypto;
-  isFinished?: boolean;
 }): Promise<CompleteResponse> => {
   const { retainDatasetCite = true, tools, toolCallMode = 'toolChoice', model } = body;
   const modelData = getLLMModel(model);
@@ -232,6 +228,8 @@ export const createStreamResponse = async ({
     index = index ? parseInt(index) : 0;
 
     if (index >= streamParts.length) {
+      delRedisCache(contentKey);
+      delRedisCache(indexKey);
       return {
         answer: answer,
         reasoning: reasoning,
@@ -362,7 +360,7 @@ export const createStreamResponse = async ({
 
       const { reasoningContent, content, finish_reason, usage } = getResponseData();
 
-      streamRes(streamParts, content, reasoningContent, finish_reason, usage);
+      await streamRes(streamParts, content, reasoningContent, finish_reason, usage);
 
       return {
         answerText: content,
@@ -429,7 +427,7 @@ export const createStreamResponse = async ({
       const { reasoningContent, content, finish_reason, usage } = getResponseData();
       const { answer: llmAnswer, streamAnswer, toolCalls } = parsePromptToolCall(content);
 
-      streamRes(streamParts, content, reasoningContent, finish_reason, usage);
+      await streamRes(streamParts, content, reasoningContent, finish_reason, usage);
 
       if (streamAnswer) {
         onStreaming?.({ text: streamAnswer });
@@ -474,7 +472,7 @@ export const createStreamResponse = async ({
 
     const { reasoningContent, content, finish_reason, usage } = getResponseData();
 
-    streamRes(streamParts, content, reasoningContent, finish_reason, usage);
+    await streamRes(streamParts, content, reasoningContent, finish_reason, usage);
 
     return {
       answerText: content,

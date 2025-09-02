@@ -14,21 +14,6 @@ export const getMsgSinJsonStr = (
   return res[1];
 };
 
-/** 错误码定义 */
-export enum ErrorCode {
-  OK = 0,
-  ValidateSignatureError = -40001,
-  ParseXmlError = -40002,
-  ComputeSignatureError = -40003,
-  IllegalAesKey = -40004,
-  ValidateCorpidError = -40005,
-  EncryptAESError = -40006,
-  DecryptAESError = -40007,
-  IllegalBuffer = -40008,
-  EncodeBase64Error = -40009,
-  DecodeBase64Error = -40010
-}
-
 /** SHA1 签名生成 */
 class SHA1 {
   getSHA1(token: string, timestamp: string, nonce: string, encrypt: string): [number, string?] {
@@ -38,7 +23,7 @@ class SHA1 {
       const sha1 = crypto.createHash('sha1').update(str).digest('hex');
       return [0, sha1];
     } catch {
-      return [ErrorCode.ComputeSignatureError];
+      return [1, 'wecom error: ErrorCode.ComputeSignatureError'];
     }
   }
 }
@@ -77,11 +62,11 @@ class JsonParse {
     try {
       const json = JSON.parse(jsonStr);
       if (!json.encrypt) {
-        return [ErrorCode.ParseXmlError];
+        return [1, 'wecom error: ErrorCode.ParseXmlError'];
       }
       return [0, json.encrypt];
     } catch {
-      return [ErrorCode.ParseXmlError];
+      return [1, 'wecom error: ErrorCode.ParseXmlError'];
     }
   }
 }
@@ -114,7 +99,7 @@ class Prpcrypt {
 
       return [0, encrypted.toString('base64')];
     } catch {
-      return [ErrorCode.EncryptAESError];
+      return [1, 'wecom error: ErrorCode.EncryptAESError'];
     }
   }
 
@@ -134,12 +119,12 @@ class Prpcrypt {
       const fromReceiveId = buf.slice(20 + msgLength).toString();
 
       if (fromReceiveId !== receiveId) {
-        return [ErrorCode.ValidateCorpidError];
+        return [1, 'wecom error: ErrorCode.ValidateCorpidError'];
       }
 
       return [0, msg];
     } catch {
-      return [ErrorCode.DecryptAESError];
+      return [1, 'wecom error: ErrorCode.DecryptAESError'];
     }
   }
 }
@@ -154,32 +139,6 @@ export class WXBizMsgCrypt {
     this.m_sToken = token;
     this.m_sEncodingAesKey = encodingAesKey;
     this.m_sReceiveId = receiveId;
-  }
-
-  /** 验证URL */
-  VerifyURL(
-    sMsgSignature: string,
-    sTimeStamp: string,
-    sNonce: string,
-    sEchoStr: string
-  ): [number, string?] {
-    if (this.m_sEncodingAesKey.length !== 43) {
-      return [ErrorCode.IllegalAesKey];
-    }
-
-    const pc = new Prpcrypt(this.m_sEncodingAesKey);
-    const sha1 = new SHA1();
-    const [ret, signature] = sha1.getSHA1(this.m_sToken, sTimeStamp, sNonce, sEchoStr);
-    if (ret !== 0) return [ret];
-
-    if (signature !== sMsgSignature) {
-      return [ErrorCode.ValidateSignatureError];
-    }
-
-    const result = pc.decrypt(sEchoStr, this.m_sReceiveId);
-    if (result[0] !== 0) return [result[0]];
-
-    return [0, result[1]];
   }
 
   /** 加密消息 */
@@ -200,39 +159,5 @@ export class WXBizMsgCrypt {
     const sEncryptMsg = jsonParse.generate(encrypt, signature!, sTimeStamp, sNonce);
 
     return [0, sEncryptMsg];
-  }
-
-  /** 解密消息 */
-  DecryptMsg(
-    sMsgSignature: string,
-    sTimeStamp: string,
-    sNonce: string,
-    sPostData: string
-  ): [number, string?] {
-    if (this.m_sEncodingAesKey.length !== 43) {
-      return [ErrorCode.IllegalAesKey];
-    }
-
-    const pc = new Prpcrypt(this.m_sEncodingAesKey);
-    const jsonParse = new JsonParse();
-    const [ret, encrypt] = jsonParse.extract(sPostData);
-    if (ret !== 0 || !encrypt) return [ret];
-
-    if (!sTimeStamp) {
-      sTimeStamp = String(Math.floor(Date.now() / 1000));
-    }
-
-    const sha1 = new SHA1();
-    const [sigRet, signature] = sha1.getSHA1(this.m_sToken, sTimeStamp, sNonce, encrypt);
-    if (sigRet !== 0) return [sigRet];
-
-    if (signature !== sMsgSignature) {
-      return [ErrorCode.ValidateSignatureError];
-    }
-
-    const result = pc.decrypt(encrypt, this.m_sReceiveId);
-    if (result[0] !== 0) return [result[0]];
-
-    return [0, result[1]];
   }
 }

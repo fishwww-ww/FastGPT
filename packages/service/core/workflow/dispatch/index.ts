@@ -56,7 +56,6 @@ type Props = Omit<ChatDispatchProps, 'workflowDispatchDeep'> & {
     nonce: string;
     streamId: string;
   };
-  isFinished?: boolean;
 };
 type NodeResponseType = DispatchNodeResultType<{
   [key: string]: any;
@@ -119,7 +118,14 @@ export async function dispatchWorkFlow(data: Props): Promise<DispatchFlowRespons
 type RunWorkflowProps = ChatDispatchProps & {
   runtimeNodes: RuntimeNodeItemType[];
   runtimeEdges: RuntimeEdgeItemType[];
+  wecomCrypto?: {
+    token: string;
+    aesKey: string;
+    nonce: string;
+    streamId: string;
+  };
 };
+
 export const runWorkflow = async (data: RunWorkflowProps): Promise<DispatchFlowResponse> => {
   let {
     res,
