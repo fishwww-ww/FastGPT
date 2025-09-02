@@ -27,6 +27,7 @@ import { getErrText } from '@fastgpt/global/common/error/utils';
 import json5 from 'json5';
 import type { NextApiResponse } from 'next';
 import { getMsgSinJsonStr } from '../../../common/secret/wecom';
+import { setRedisCache, getRedisCache, delRedisCache } from '../../../common/redis/cache';
 
 type ResponseEvents = {
   onStreaming?: ({ text }: { text: string }) => void;
@@ -208,6 +209,81 @@ export const createStreamResponse = async ({
   const { retainDatasetCite = true, tools, toolCallMode = 'toolChoice', model } = body;
   const modelData = getLLMModel(model);
 
+  const streamRes = async (
+    streamParts: any[],
+    answer: string,
+    reasoning: string,
+    finish_reason: CompletionFinishReason,
+    usage: CompletionUsage
+  ) => {
+    const createPlaintext = (finish: boolean, answer: string, streamId?: string) => ({
+      msgtype: 'stream',
+      stream: {
+        ...(streamId && { id: streamId }),
+        finish,
+        content: answer
+      }
+    });
+
+    const contentKey = `content:${wecomCrypto!.streamId || 'default'}`;
+    const indexKey = `index:${wecomCrypto!.streamId || 'default'}`;
+
+    let index: string | null | number = await getRedisCache(indexKey);
+    index = index ? parseInt(index) : 0;
+
+    if (index >= streamParts.length) {
+      return {
+        answer: answer,
+        reasoning: reasoning,
+        finish_reason: finish_reason,
+        usage: usage
+      };
+    }
+
+    let content = await getRedisCache(contentKey);
+    content = content ? content : '';
+    content += streamParts[index].choices[0].delta.content;
+
+    const timeStamp = Math.floor(Date.now() / 1000).toString();
+    let plaintext: any = {};
+    if (index === streamParts.length - 1) {
+      plaintext = createPlaintext(true, content);
+      await delRedisCache(contentKey);
+      await delRedisCache(indexKey);
+    } else {
+      if (index === 0) {
+        plaintext = createPlaintext(false, content, wecomCrypto!.streamId);
+      } else {
+        plaintext = createPlaintext(false, content);
+      }
+      await setRedisCache(contentKey, content, 3600);
+      await setRedisCache(indexKey, index + 1, 3600);
+    }
+    const encryptedData = getMsgSinJsonStr(
+      plaintext,
+      timeStamp,
+      wecomCrypto!.nonce,
+      wecomCrypto!.token,
+      wecomCrypto!.aesKey
+    );
+
+    return new Promise((resolve) => {
+      res.write(encryptedData!, (error) => {
+        if (error) {
+          throw new Error('写入响应失败:' + error);
+        }
+        res.end(() => {
+          resolve({
+            answer,
+            reasoning,
+            finish_reason,
+            usage
+          });
+        });
+      });
+    });
+  };
+
   const { parsePart, getResponseData, updateFinishReason } = parseLLMStreamResponse();
 
   if (tools?.length) {
@@ -215,7 +291,9 @@ export const createStreamResponse = async ({
       let callingTool: ChatCompletionMessageToolCall['function'] | null = null;
       const toolCalls: ChatCompletionMessageToolCall[] = [];
 
+      const streamParts = [];
       for await (const part of response) {
+        streamParts.push(part);
         if (isAborted?.()) {
           response.controller?.abort();
           updateFinishReason('close');
@@ -284,76 +362,7 @@ export const createStreamResponse = async ({
 
       const { reasoningContent, content, finish_reason, usage } = getResponseData();
 
-      //明文响应
-      const plainAnswer = (finish: boolean, answer: string) => {
-        return {
-          msgtype: 'stream',
-          stream: {
-            id: wecomCrypto!.streamId,
-            finish: finish,
-            content: answer
-          }
-        };
-      };
-
-      // 检查响应是否为空
-      if (!content || content.trim().length === 0) {
-        const defaultAnswer = '抱歉，我暂时无法回答您的问题，请稍后再试。';
-
-        if (isFinished) {
-          const finishRes = plainAnswer(true, defaultAnswer);
-          const finishStamp = Math.floor(Date.now() / 1000).toString();
-          const finishEncrypt = getMsgSinJsonStr(
-            finishRes,
-            finishStamp,
-            wecomCrypto!.nonce,
-            wecomCrypto!.token,
-            wecomCrypto!.aesKey
-          );
-          res.write(finishEncrypt!);
-          res.end();
-        } else {
-          const answerRes = plainAnswer(false, defaultAnswer);
-          const answerStamp = Math.floor(Date.now() / 1000).toString();
-          const streamEncrypt = getMsgSinJsonStr(
-            answerRes,
-            answerStamp,
-            wecomCrypto!.nonce,
-            wecomCrypto!.token,
-            wecomCrypto!.aesKey
-          );
-          res.write(streamEncrypt!);
-          res.end();
-        }
-
-        return { answerText: defaultAnswer, reasoningText: reasoningContent, finish_reason, usage };
-      }
-
-      if (isFinished) {
-        const finishRes = plainAnswer(true, content);
-        const finishStamp = Math.floor(Date.now() / 1000).toString();
-        const finishEncrypt = getMsgSinJsonStr(
-          finishRes,
-          finishStamp,
-          wecomCrypto!.nonce,
-          wecomCrypto!.token,
-          wecomCrypto!.aesKey
-        );
-        res.write(finishEncrypt!);
-        res.end();
-      } else {
-        const answerRes = plainAnswer(false, content);
-        const answerStamp = Math.floor(Date.now() / 1000).toString();
-        const streamEncrypt = getMsgSinJsonStr(
-          answerRes,
-          answerStamp,
-          wecomCrypto!.nonce,
-          wecomCrypto!.token,
-          wecomCrypto!.aesKey
-        );
-        res.write(streamEncrypt!);
-        res.end();
-      }
+      streamRes(streamParts, content, reasoningContent, finish_reason, usage);
 
       return {
         answerText: content,
@@ -366,7 +375,9 @@ export const createStreamResponse = async ({
       let startResponseWrite = false;
       let answer = '';
 
+      const streamParts = [];
       for await (const part of response) {
+        streamParts.push(part);
         if (isAborted?.()) {
           response.controller?.abort();
           updateFinishReason('close');
@@ -418,6 +429,8 @@ export const createStreamResponse = async ({
       const { reasoningContent, content, finish_reason, usage } = getResponseData();
       const { answer: llmAnswer, streamAnswer, toolCalls } = parsePromptToolCall(content);
 
+      streamRes(streamParts, content, reasoningContent, finish_reason, usage);
+
       if (streamAnswer) {
         onStreaming?.({ text: streamAnswer });
       }
@@ -436,7 +449,9 @@ export const createStreamResponse = async ({
     }
   } else {
     // Not use tool
+    const streamParts = [];
     for await (const part of response) {
+      streamParts.push(part);
       if (isAborted?.()) {
         response.controller?.abort();
         updateFinishReason('close');
@@ -458,6 +473,8 @@ export const createStreamResponse = async ({
     }
 
     const { reasoningContent, content, finish_reason, usage } = getResponseData();
+
+    streamRes(streamParts, content, reasoningContent, finish_reason, usage);
 
     return {
       answerText: content,
