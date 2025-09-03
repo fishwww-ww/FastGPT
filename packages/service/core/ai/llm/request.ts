@@ -28,19 +28,13 @@ import json5 from 'json5';
 import type { NextApiResponse } from 'next';
 import { getMsgSinJsonStr } from '../../../common/secret/wecom';
 import { setRedisCache, getRedisCache, delRedisCache } from '../../../common/redis/cache';
+import type { WecomCrypto } from '@fastgpt/global/common/secret/type';
 
 type ResponseEvents = {
   onStreaming?: ({ text }: { text: string }) => void;
   onReasoning?: ({ text }: { text: string }) => void;
   onToolCall?: ({ call }: { call: ChatCompletionMessageToolCall }) => void;
   onToolParam?: ({ tool, params }: { tool: ChatCompletionMessageToolCall; params: string }) => void;
-};
-
-type WecomCrypto = {
-  token: string;
-  aesKey: string;
-  nonce: string;
-  streamId: string;
 };
 
 type CreateLLMResponseProps<T extends CompletionsBodyType> = {
