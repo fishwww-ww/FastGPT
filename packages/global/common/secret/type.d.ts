@@ -10,4 +10,5 @@ export type WecomCrypto = {
   aesKey: string;
   nonce: string;
   streamId: string;
+  isFirst: boolean;
 };

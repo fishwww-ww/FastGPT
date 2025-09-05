@@ -92,6 +92,15 @@ export const createLLMResponse = async <T extends CompletionsBodyType>(
     messages: rewriteMessages
   });
 
+  const createPlaintext = (finish: boolean, answer: string, streamId?: string) => ({
+    msgtype: 'stream',
+    stream: {
+      ...(streamId && { id: streamId }),
+      finish,
+      content: answer
+    }
+  });
+
   // console.log(JSON.stringify(requestBody, null, 2));
   const { response, isStreamResponse, getEmptyResponseTip } = await createChatCompletion({
     body: requestBody,
@@ -104,6 +113,71 @@ export const createLLMResponse = async <T extends CompletionsBodyType>(
     }
   });
 
+  if (wecomCrypto) {
+    if (wecomCrypto.isFirst) {
+      const firstResponse = createPlaintext(false, '', wecomCrypto!.streamId);
+      const timeStamp = Math.floor(Date.now() / 1000).toString();
+      const firstEncrypted = getMsgSinJsonStr(
+        firstResponse,
+        timeStamp,
+        wecomCrypto!.nonce,
+        wecomCrypto!.token,
+        wecomCrypto!.aesKey
+      );
+      res?.write(firstEncrypted);
+      res?.end();
+      const resKey = `res:${wecomCrypto!.streamId || 'default'}`;
+      const stopKey = `stop:${wecomCrypto!.streamId || 'default'}`;
+      let accumlatedResponse = '';
+      if (isStreamResponse) {
+        for await (const part of response) {
+          setRedisCache(stopKey, 'false', 3600);
+          if (part.choices[0].finish_reason !== 'stop') {
+            if (part.choices[0].delta.content) {
+              accumlatedResponse += part.choices[0].delta.content;
+            }
+          }
+          await setRedisCache(resKey, accumlatedResponse, 3600);
+          if (part.choices[0].finish_reason === 'stop') {
+            setRedisCache(stopKey, 'true', 3600);
+            break;
+          }
+        }
+      }
+    } else {
+      const resKey = `res:${wecomCrypto!.streamId || 'default'}`;
+      const stopKey = `stop:${wecomCrypto!.streamId || 'default'}`;
+      const response = await getRedisCache(resKey);
+      const stop = await getRedisCache(stopKey);
+      if (stop === 'true') {
+        const streamResponse = createPlaintext(true, response!);
+        const timeStamp = Math.floor(Date.now() / 1000).toString();
+        const encryptedData = getMsgSinJsonStr(
+          streamResponse,
+          timeStamp,
+          wecomCrypto!.nonce,
+          wecomCrypto!.token,
+          wecomCrypto!.aesKey
+        );
+        res?.write(encryptedData);
+        delRedisCache(resKey);
+        delRedisCache(stopKey);
+      } else {
+        const streamResponse = createPlaintext(false, response!);
+        const timeStamp = Math.floor(Date.now() / 1000).toString();
+        const encryptedData = getMsgSinJsonStr(
+          streamResponse,
+          timeStamp,
+          wecomCrypto!.nonce,
+          wecomCrypto!.token,
+          wecomCrypto!.aesKey
+        );
+        res?.write(encryptedData);
+      }
+      res?.end();
+    }
+  }
+
   const { answerText, reasoningText, toolCalls, finish_reason, usage } = await (async () => {
     if (isStreamResponse) {
       return createStreamResponse({
@@ -113,9 +187,7 @@ export const createLLMResponse = async <T extends CompletionsBodyType>(
         onStreaming: args.onStreaming,
         onReasoning: args.onReasoning,
         onToolCall: args.onToolCall,
-        onToolParam: args.onToolParam,
-        res: res!,
-        wecomCrypto
+        onToolParam: args.onToolParam
       });
     } else {
       return createCompleteResponse({
@@ -181,100 +253,19 @@ type CompleteResponse = Pick<
 };
 
 export const createStreamResponse = async ({
-  res,
   body,
   response,
   isAborted,
   onStreaming,
   onReasoning,
   onToolCall,
-  onToolParam,
-  wecomCrypto
+  onToolParam
 }: CompleteParams & {
-  res: NextApiResponse;
   response: StreamChatType;
   isAborted?: () => boolean | undefined;
-  wecomCrypto?: WecomCrypto;
 }): Promise<CompleteResponse> => {
   const { retainDatasetCite = true, tools, toolCallMode = 'toolChoice', model } = body;
   const modelData = getLLMModel(model);
-
-  const streamRes = async (
-    streamParts: any[],
-    answer: string,
-    reasoning: string,
-    finish_reason: CompletionFinishReason,
-    usage: CompletionUsage
-  ) => {
-    const createPlaintext = (finish: boolean, answer: string, streamId?: string) => ({
-      msgtype: 'stream',
-      stream: {
-        ...(streamId && { id: streamId }),
-        finish,
-        content: answer
-      }
-    });
-
-    const contentKey = `content:${wecomCrypto!.streamId || 'default'}`;
-    const indexKey = `index:${wecomCrypto!.streamId || 'default'}`;
-
-    let index: string | null | number = await getRedisCache(indexKey);
-    index = index ? parseInt(index) : 0;
-
-    if (index >= streamParts.length) {
-      delRedisCache(contentKey);
-      delRedisCache(indexKey);
-      return {
-        answer: answer,
-        reasoning: reasoning,
-        finish_reason: finish_reason,
-        usage: usage
-      };
-    }
-
-    let content = await getRedisCache(contentKey);
-    content = content ? content : '';
-    content += streamParts[index].choices[0].delta.content;
-
-    const timeStamp = Math.floor(Date.now() / 1000).toString();
-    let plaintext: any = {};
-    if (index === streamParts.length - 1) {
-      plaintext = createPlaintext(true, content);
-      await delRedisCache(contentKey);
-      await delRedisCache(indexKey);
-    } else {
-      if (index === 0) {
-        plaintext = createPlaintext(false, content, wecomCrypto!.streamId);
-      } else {
-        plaintext = createPlaintext(false, content);
-      }
-      await setRedisCache(contentKey, content, 3600);
-      await setRedisCache(indexKey, index + 1, 3600);
-    }
-    const encryptedData = getMsgSinJsonStr(
-      plaintext,
-      timeStamp,
-      wecomCrypto!.nonce,
-      wecomCrypto!.token,
-      wecomCrypto!.aesKey
-    );
-
-    return new Promise((resolve) => {
-      res.write(encryptedData!, (error) => {
-        if (error) {
-          throw new Error('写入响应失败:' + error);
-        }
-        res.end(() => {
-          resolve({
-            answer,
-            reasoning,
-            finish_reason,
-            usage
-          });
-        });
-      });
-    });
-  };
 
   const { parsePart, getResponseData, updateFinishReason } = parseLLMStreamResponse();
 
@@ -283,9 +274,7 @@ export const createStreamResponse = async ({
       let callingTool: ChatCompletionMessageToolCall['function'] | null = null;
       const toolCalls: ChatCompletionMessageToolCall[] = [];
 
-      const streamParts = [];
       for await (const part of response) {
-        streamParts.push(part);
         if (isAborted?.()) {
           response.controller?.abort();
           updateFinishReason('close');
@@ -354,8 +343,6 @@ export const createStreamResponse = async ({
 
       const { reasoningContent, content, finish_reason, usage } = getResponseData();
 
-      await streamRes(streamParts, content, reasoningContent, finish_reason, usage);
-
       return {
         answerText: content,
         reasoningText: reasoningContent,
@@ -367,9 +354,7 @@ export const createStreamResponse = async ({
       let startResponseWrite = false;
       let answer = '';
 
-      const streamParts = [];
       for await (const part of response) {
-        streamParts.push(part);
         if (isAborted?.()) {
           response.controller?.abort();
           updateFinishReason('close');
@@ -421,8 +406,6 @@ export const createStreamResponse = async ({
       const { reasoningContent, content, finish_reason, usage } = getResponseData();
       const { answer: llmAnswer, streamAnswer, toolCalls } = parsePromptToolCall(content);
 
-      await streamRes(streamParts, content, reasoningContent, finish_reason, usage);
-
       if (streamAnswer) {
         onStreaming?.({ text: streamAnswer });
       }
@@ -441,9 +424,7 @@ export const createStreamResponse = async ({
     }
   } else {
     // Not use tool
-    const streamParts = [];
     for await (const part of response) {
-      streamParts.push(part);
       if (isAborted?.()) {
         response.controller?.abort();
         updateFinishReason('close');
@@ -465,8 +446,6 @@ export const createStreamResponse = async ({
     }
 
     const { reasoningContent, content, finish_reason, usage } = getResponseData();
-
-    await streamRes(streamParts, content, reasoningContent, finish_reason, usage);
 
     return {
       answerText: content,
