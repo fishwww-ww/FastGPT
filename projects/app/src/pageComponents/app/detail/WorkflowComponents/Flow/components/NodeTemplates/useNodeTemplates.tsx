@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { useRequest2 } from '@fastgpt/web/hooks/useRequest';
 import { useSystemStore } from '@/web/common/system/useSystemStore';
 import type { NodeTemplateListItemType } from '@fastgpt/global/core/workflow/type/node';
@@ -8,10 +8,15 @@ import { TemplateTypeEnum } from './header';
 import { useContextSelector } from 'use-context-selector';
 import { WorkflowContext } from '../../../context';
 import type { ParentIdType } from '@fastgpt/global/common/parentFolder/type';
+import { useDebounceEffect } from 'ahooks';
 
 export const useNodeTemplates = () => {
   const { feConfigs } = useSystemStore();
   const [templateType, setTemplateType] = useState(TemplateTypeEnum.basic);
+
+  const [searchKey, setSearchKey] = useState('');
+  const searchKeyLock = useRef(false);
+
   const [parentId, setParentId] = useState<ParentIdType>('');
 
   const basicNodeTemplates = useContextSelector(WorkflowContext, (v) => v.basicNodeTemplates);
@@ -72,9 +77,9 @@ export const useNodeTemplates = () => {
     runAsync: loadNodeTemplates
   } = useRequest2(
     async ({
-      parentId = '',
+      parentId,
       type = templateType,
-      searchVal = ''
+      searchVal
     }: {
       parentId?: ParentIdType;
       type?: TemplateTypeEnum;
@@ -83,7 +88,8 @@ export const useNodeTemplates = () => {
       if (type === TemplateTypeEnum.teamPlugin) {
         // app, workflow-plugin, mcp
         return getTeamPlugTemplates({
-          parentId
+          parentId,
+          searchKey: searchVal
         }).then((res) => res.filter((app) => app.id !== appId));
       }
       if (type === TemplateTypeEnum.systemPlugin) {
@@ -95,19 +101,42 @@ export const useNodeTemplates = () => {
       }
     },
     {
-      onSuccess(res, [{ parentId = '', type = templateType }]) {
-        setParentId(parentId);
-        setTemplateType(type);
-      },
-      refreshDeps: [templateType]
+      onSuccess() {
+        searchKeyLock.current = false;
+      }
+    }
+  );
+
+  useDebounceEffect(
+    () => {
+      if (searchKeyLock.current) {
+        return;
+      }
+
+      loadNodeTemplates({ parentId, searchVal: searchKey });
+    },
+    [searchKey],
+    {
+      wait: 300
     }
   );
 
   const onUpdateParentId = useCallback(
     (parentId: ParentIdType) => {
-      loadNodeTemplates({
-        parentId
-      });
+      searchKeyLock.current = true;
+      setSearchKey('');
+      setParentId(parentId);
+      loadNodeTemplates({ parentId });
+    },
+    [loadNodeTemplates]
+  );
+  const onUpdateTemplateType = useCallback(
+    (type: TemplateTypeEnum) => {
+      searchKeyLock.current = true;
+      setSearchKey('');
+      setParentId('');
+      setTemplateType(type);
+      loadNodeTemplates({ type });
     },
     [loadNodeTemplates]
   );
@@ -124,7 +153,9 @@ export const useNodeTemplates = () => {
     parentId,
     templatesIsLoading,
     templates,
-    loadNodeTemplates,
-    onUpdateParentId
+    onUpdateParentId,
+    onUpdateTemplateType,
+    searchKey,
+    setSearchKey
   };
 };

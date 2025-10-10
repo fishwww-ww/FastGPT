@@ -3,17 +3,15 @@ import { createDatasetTrainingMongoWatch } from '@/service/core/dataset/training
 import { MongoSystemConfigs } from '@fastgpt/service/common/system/config/schema';
 import { debounce } from 'lodash';
 import { MongoAppTemplate } from '@fastgpt/service/core/app/templates/templateSchema';
-import { getAppTemplatesAndLoadThem } from '@fastgpt/templates/register';
+import { getAppTemplatesAndLoadThem } from '@fastgpt/service/core/app/templates/register';
 import { watchSystemModelUpdate } from '@fastgpt/service/core/ai/config/utils';
 import { SystemConfigsTypeEnum } from '@fastgpt/global/common/system/config/constants';
-import { refetchSystemPlugins } from '@fastgpt/service/core/app/plugin/controller';
 
 export const startMongoWatch = async () => {
   reloadConfigWatch();
   createDatasetTrainingMongoWatch();
   refetchAppTemplates();
   watchSystemModelUpdate();
-  refetchSystemPlugins();
 };
 
 const reloadConfigWatch = () => {
